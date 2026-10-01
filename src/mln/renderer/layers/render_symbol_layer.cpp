@@ -30,6 +30,9 @@
 #include <mln/shaders/symbol_layer_ubo.hpp>
 #include <mln/renderer/layers/collision_layer_tweaker.hpp>
 
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <set>
 
 namespace mln {
@@ -261,6 +264,28 @@ void RenderSymbolLayer::prepare(const LayerPrepareParameters& params) {
 namespace {
 const SegmentVector emptySegmentVector;
 constexpr auto posOffsetAttribName = "a_pos_offset";
+
+// The draw priority of a symbol drawable in a layer that sorts its features
+// by `symbol-sort-key`.
+//
+// A tile layer group draws its drawables by priority, then in the order they
+// were created. A tile's drawables are created once and kept for as long as
+// the tile is rendered, so without a priority the order between two tiles is
+// the order in which their buckets happened to arrive: a feature with a lower
+// sort key in a tile built later is drawn over a feature with a higher key in
+// a tile built earlier, and panning or zooming, which rebuilds tiles, changes
+// which one is on top. Deriving the priority from the sort key keeps the sort
+// key in force across tiles as it already is within one.
+gfx::DrawPriority sortKeyDrawPriority(const float sortKey, const SymbolType type) {
+    // An order-preserving map from float to integer: non-negative floats
+    // compare like their bit patterns, negative ones in reverse.
+    std::int32_t bits = 0;
+    std::memcpy(&bits, &sortKey, sizeof(bits));
+    const std::int64_t key = bits >= 0 ? std::int64_t{bits}
+                                       : std::int64_t{std::numeric_limits<std::int32_t>::min()} - bits;
+    // Text over icons of the same key, as `RenderableSegment` orders them.
+    return key * 2 + (type == SymbolType::Text ? 1 : 0);
+}
 
 void updateTileAttributes(const SymbolBucket::Buffer& buffer,
                           const bool isText,
@@ -812,6 +837,9 @@ void RenderSymbolLayer::update(gfx::ShaderRegistry& shaders,
                 drawable->setTileID(tileID);
                 drawable->setLayerTweaker(layerTweaker);
                 drawable->setRenderTile(renderTilesOwner, &tile);
+                if (sortFeaturesByKey) {
+                    drawable->setDrawPriority(sortKeyDrawPriority(renderable.sortKey, renderable.type));
+                }
 
                 PaintPropertyBindersBase& textBinders = bucketPaintProperties.textBinders;
                 PaintPropertyBindersBase& iconBinders = bucketPaintProperties.iconBinders;
